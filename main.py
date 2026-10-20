@@ -1,7 +1,8 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Cookie, Query, Header, Form, File, UploadFile, HTTPException
 from enum import Enum
 from pydantic import BaseModel, AfterValidator, Field
 from typing import Annotated, Literal
+from datetime import date
 import random
 app = FastAPI()
 
@@ -20,15 +21,45 @@ class PageParams (BaseModel):
     pageNumber: int = Field(1, ge=1)
     orderBy: Literal['created_at', 'updated_at'] = 'created_at'
 
+class Cookies (BaseModel):
+    session_id:str
+    isTma: bool
+
+class CommonHeaders(BaseModel):
+    host: str | None = None
+    save_data: bool = False
+
+# 请求体
+class Student(BaseModel):
+    user_name: str = ''
+    user_password: str = ''
+    real_name: str = ''
+    age: int = Field(ge=18)
+    sex: SexEnum = 1
+    birth: date = '2020-12-03'
+
+class StudentOut(BaseModel):
+    user_name: str
+    real_name: str
+    age: int = Field(ge=18)
+    sex: SexEnum
+    birth: date
+@app.get('/student/list', response_model=list[Student], status_code=200)
+async def getStudentList (pageParams: Annotated[PageParams, Query()]) -> any:
+    return [
+        Student(name='小红', age=18, sex=1, birth='2012-12-12'),
+        Student(name='小明', age=18, sex=0, birth='2012-12-12'),
+    ]
 
 
-@app.get('/student/list')
-async def getStudentList (pageParams: Annotated[PageParams, Query()]):
-    return {'list': []}
+students = {
+    'id1': { 'real_name': '小明', 'age' : 30 },
+    'id2': { 'real_name': '小红', 'sex' : 1 }
+}
 
-@app.get("/student/{student_id}/info")
-async def getSyudentInfo(student_id: int):
-    return {"student_id": student_id}
+@app.get("/student/{student_id}/info", response_model=Student, response_model_exclude_unset=True)
+async def getSyudentInfo(student_id: str):
+    return students[student_id]
 
 @app.get('/model/{model_name}')
 async def getModelInfo (model_name : ModelName):
@@ -49,7 +80,7 @@ async def read_items (skip: int = 0, limit: int = 10):
 
 def check_q (qstr: str):
     if not qstr.startswith('qp'):
-        raise ValueError('错误的开头参数，必学以qp开头')
+        raise ValueError('错误的开头参数，必需qp开')
     return qstr
 
 @app.get('/users/{user_id}/items/{item_id}')
@@ -62,13 +93,24 @@ async def read_item (item_id: str, user_id:str, short: bool, q: Annotated[str | 
     return item
 
 
-# 请求体
-class Student(BaseModel):
-    name: str
-    age: int = Field(ge=18)
-    sex: SexEnum
-    birth: str
-
-@app.post('/student/add')
-async def student_add(student: Student):
+@app.post('/student/add', response_model=StudentOut)
+async def student_add(student: Student) -> any:
     return student
+
+
+class LoginFormData(BaseModel):
+    username: str
+    password: str
+    model_config = {
+        'extra': 'forbid'
+    }
+
+@app.post('/login')
+async def login(form_data : Annotated[LoginFormData, Form()]):
+    if form_data.username != 'shallwe':
+        raise HTTPException(status_code=405, detail='username error')
+    return form_data
+
+@app.post('/upload/add')
+async def upload_add(file: UploadFile):
+    return {'filename': file.filename}
