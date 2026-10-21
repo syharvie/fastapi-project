@@ -1,10 +1,25 @@
-from fastapi import FastAPI, Cookie, Query, Header, Form, File, UploadFile, HTTPException
+from fastapi import FastAPI, Cookie, Query, Header, Form, File, UploadFile, HTTPException, Request, Depends
+from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.encoders import jsonable_encoder
 from enum import Enum
 from pydantic import BaseModel, AfterValidator, Field
 from typing import Annotated, Literal
 from datetime import date
 import random
 app = FastAPI()
+
+class UnicornException(Exception):
+    def __init__(self, name: str):
+        self.name = name
+
+@app.exception_handler(UnicornException)
+async def unicorn_exception_hanle (request: Request, exc: UnicornException):
+    return JSONResponse(
+        status_code=412,
+        content={"message": f"Oops! {exc.name} did something. There goes a rainbow..."},
+    )
 
 class ModelName (str, Enum):
     yuwen = 'yuwen'
@@ -20,6 +35,13 @@ class PageParams (BaseModel):
     pageSize: int = Field(100, gt=1, le=1000)
     pageNumber: int = Field(1, ge=1)
     orderBy: Literal['created_at', 'updated_at'] = 'created_at'
+
+
+class CommonPagerionClass:
+    def __init__(self, page_size: int = 10, page_num:int = 1, order_by:str = 'asc'):
+        self.page_size = page_size
+        self.page_num = page_num
+        self.order_by = order_by
 
 class Cookies (BaseModel):
     session_id:str
@@ -44,8 +66,15 @@ class StudentOut(BaseModel):
     age: int = Field(ge=18)
     sex: SexEnum
     birth: date
-@app.get('/student/list', response_model=list[Student], status_code=200)
-async def getStudentList (pageParams: Annotated[PageParams, Query()]) -> any:
+
+
+async def auth_validate(user_token: Annotated[str, Header()]):
+    if user_token != '123':
+        raise HTTPException(status_code=400, detail="X-Token header invalid")
+
+CommonPagerionData = Annotated[CommonPagerionClass, Depends()]
+@app.get('/student/list', response_model=list[Student], status_code=200, dependencies=[Depends(auth_validate)])
+async def getStudentList (common: CommonPagerionData) -> any:
     return [
         Student(name='小红', age=18, sex=1, birth='2012-12-12'),
         Student(name='小明', age=18, sex=0, birth='2012-12-12'),
@@ -58,7 +87,7 @@ students = {
 }
 
 @app.get("/student/{student_id}/info", response_model=Student, response_model_exclude_unset=True)
-async def getSyudentInfo(student_id: str):
+async def getSyudentInfo(student_id: int):
     return students[student_id]
 
 @app.get('/model/{model_name}')
@@ -93,9 +122,15 @@ async def read_item (item_id: str, user_id:str, short: bool, q: Annotated[str | 
     return item
 
 
+student_db = {}
+
 @app.post('/student/add', response_model=StudentOut)
 async def student_add(student: Student) -> any:
-    return student
+    """
+        注册学生信息
+    """
+    jsondata = jsonable_encoder(student)
+    return jsondata
 
 
 class LoginFormData(BaseModel):
@@ -105,10 +140,24 @@ class LoginFormData(BaseModel):
         'extra': 'forbid'
     }
 
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler (request, exc):
+    return PlainTextResponse(str(exc.detail), status_code=413)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler (request, exc: RequestValidationError):
+    message = 'Validation errors:'
+    for error in exc.errors():
+        message += f"\nField: {error['loc']}, Error: {error['msg']}"
+    return PlainTextResponse(message, status_code=402)    
+
 @app.post('/login')
 async def login(form_data : Annotated[LoginFormData, Form()]):
     if form_data.username != 'shallwe':
-        raise HTTPException(status_code=405, detail='username error')
+        # raise UnicornException('shallwe')
+        raise HTTPException(status_code=411, detail='defalut')
     return form_data
 
 @app.post('/upload/add')
