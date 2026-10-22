@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Cookie, Query, Header, Form, File, UploadFile, HTTPException, Request, Depends
+from fastapi import FastAPI, Cookie, Query, Header, Form, File, UploadFile, HTTPException, Request, Depends, Path, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -7,14 +7,14 @@ from enum import Enum
 from pydantic import BaseModel, AfterValidator, Field
 from typing import Annotated, Literal
 from datetime import date
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+oauth2_shcema = OAuth2PasswordBearer(tokenUrl='token')
 import random
-app = FastAPI()
-
 class UnicornException(Exception):
     def __init__(self, name: str):
         self.name = name
 
-@app.exception_handler(UnicornException)
+
 async def unicorn_exception_hanle (request: Request, exc: UnicornException):
     return JSONResponse(
         status_code=412,
@@ -58,7 +58,9 @@ class Student(BaseModel):
     real_name: str = ''
     age: int = Field(ge=18)
     sex: SexEnum = 1
-    birth: date = '2020-12-03'
+    token: str = 'token123'
+    birth: date = '2020-12-03',
+    disabled: bool | None = None
 
 class StudentOut(BaseModel):
     user_name: str
@@ -66,15 +68,28 @@ class StudentOut(BaseModel):
     age: int = Field(ge=18)
     sex: SexEnum
     birth: date
+    disabled: bool | None = None
 
+
+class NoStudent (Exception):
+    pass
+
+def getStudent():
+    try:
+        yield 'xiaoing'
+    except NoStudent:
+        print('233----ahaha')     
 
 async def auth_validate(user_token: Annotated[str, Header()]):
     if user_token != '123':
         raise HTTPException(status_code=400, detail="X-Token header invalid")
 
 CommonPagerionData = Annotated[CommonPagerionClass, Depends()]
-@app.get('/student/list', response_model=list[Student], status_code=200, dependencies=[Depends(auth_validate)])
-async def getStudentList (common: CommonPagerionData) -> any:
+app = FastAPI()
+@app.exception_handler(UnicornException)
+@app.get('/student/list', response_model=list[Student], status_code=200)
+async def getStudentList (common: CommonPagerionData, token: Annotated[str, Depends(oauth2_shcema)]) -> any:
+    return {"token": token}
     return [
         Student(name='小红', age=18, sex=1, birth='2012-12-12'),
         Student(name='小明', age=18, sex=0, birth='2012-12-12'),
@@ -86,8 +101,13 @@ students = {
     'id2': { 'real_name': '小红', 'sex' : 1 }
 }
 
+
 @app.get("/student/{student_id}/info", response_model=Student, response_model_exclude_unset=True)
-async def getSyudentInfo(student_id: int):
+async def getSyudentInfo(student_id: Annotated[str, Path()]):
+    if student_id == 'id3':
+        raise NoStudent('vvvvvvv-id3')
+    if student_id == 'id4':
+        raise 
     return students[student_id]
 
 @app.get('/model/{model_name}')
@@ -142,9 +162,9 @@ class LoginFormData(BaseModel):
 
 
 
-@app.exception_handler(StarletteHTTPException)
-async def http_exception_handler (request, exc):
-    return PlainTextResponse(str(exc.detail), status_code=413)
+# @app.exception_handler(StarletteHTTPException)
+# async def http_exception_handler (request, exc):
+#     return PlainTextResponse(str(exc.detail), status_code=413)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler (request, exc: RequestValidationError):
@@ -163,3 +183,75 @@ async def login(form_data : Annotated[LoginFormData, Form()]):
 @app.post('/upload/add')
 async def upload_add(file: UploadFile):
     return {'filename': file.filename}
+
+
+fake_student_db = {
+    "id1": {
+        'user_name': 'shallwe1',
+        'user_password': 'fakehashed123',
+        'real_name': '小明',
+        'token': 'dshdjhwk2334444',
+        'age': 19,
+        'sex': 0,
+        'birth': '2020-12-03',
+        'disabled': None
+    },
+    "id2": {
+        'user_name': 'shallwe2',
+        'user_password': 'fakehashed456',
+        'real_name': '小红',
+        'age': 20,
+        'sex': 1,
+        'token': 'ndksjc91@@#d',
+        'birth': '2022-12-03',
+        'disabled': True
+    },
+}
+
+def fake_hash_password(password: str):
+    return 'fakehashed'  + password
+
+class StudentInDb(Student):
+    user_password: str
+
+def get_student(db, token: str):
+    for el in db.values():
+        if el.get('token') == token:
+            return StudentInDb(**el)
+def fake_decode_token(token):
+    student = get_student(fake_student_db, token)
+    return  student
+
+async def get_current_student(token: Annotated[str, Depends(oauth2_shcema)]):
+    student = fake_decode_token(token)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return student
+
+
+async def get_current_active_student(current_student: Annotated[Student, Depends(get_current_student)]):
+    if current_student.disabled:
+        raise HTTPException(status_code=400, detail='Inactive Student')
+    return current_student
+
+
+
+@app.post('/token/')
+async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
+    student_dict = fake_student_db.get(form_data.username)
+    if not student_dict:
+        raise HTTPException(status_code=400, detail='Incorrect username or password')
+    student = StudentInDb(**student_dict)
+    hashed_password = fake_hash_password(form_data.password)
+    if not hashed_password == student.user_password:
+        raise HTTPException(status_code=400, detail='Incorrect username or password')
+    return {'access_token' : student.token, 'token_type': 'bearer'}
+
+
+@app.get('/student/me')
+async def read_student_me(current_student: Annotated[Student, Depends(get_current_active_student)]):
+    return current_student
